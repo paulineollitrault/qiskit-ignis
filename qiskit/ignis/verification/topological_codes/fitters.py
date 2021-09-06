@@ -12,37 +12,49 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-'''
+# pylint: disable=invalid-name
+
+"""
 Decoders for quantum error correction codes, with a focus on those that can be
 expressed as solving a graph-theoretic problem.
-'''
+"""
 
 import copy
 import warnings
-import networkx as nx
+import retworkx as rx
+import numpy as np
 
-from qiskit import QuantumCircuit, Aer, execute
+from qiskit import QuantumCircuit, execute
+
+try:
+    from qiskit.providers.aer import Aer
+    HAS_AER = True
+except ImportError:
+    from qiskit import BasicAer
+    HAS_AER = False
 
 
 class GraphDecoder():
-    '''
-        Class to construct the graph corresponding to the possible syndromes
-        of a quantum error correction code, and then run suitable decoders.
-    '''
+    """
+    Class to construct the graph corresponding to the possible syndromes
+    of a quantum error correction code, and then run suitable decoders.
+    """
 
     def __init__(self, code, S=None):
-        '''
+        """
         Args:
-            code: The QEC Code object for which this decoder will be used.
-            S: Graph describing connectivity between syndrome elements. Will
-            be generated automatically if not supplied.
+            code (RepitionCode): The QEC Code object for which this decoder
+                will be used.
+            S (retworkx.PyGraph): Graph describing connectivity between syndrome
+                elements. Will be generated automatically if not supplied.
+
         Additional information:
-            The decoder for the supplied `code` is initialized by running
-            `_make_syndrome_graph()`. Since this process can take some
-            time, it is also possible to load in a premade `S`. However,
-            if this was created for a differently defined `code`,it won't work
-            properly.
-        '''
+            The decoder for the supplied ``code`` is initialized by running
+            ``_make_syndrome_graph()``. Since this process can take some
+            time, it is also possible to load in a premade ``S``. However,
+            if this was created for a differently defined ``code``, it won't
+            work properly.
+        """
 
         self.code = code
 
@@ -58,16 +70,34 @@ class GraphDecoder():
             separated_string.append(syndrome_type_string.split(' '))
         return separated_string
 
+    def _string2nodes(self, string, logical='0'):
+
+        separated_string = self._separate_string(string)
+        nodes = []
+        for syn_type, _ in enumerate(separated_string):
+            for syn_round in range(
+                    len(separated_string[syn_type])):
+                elements = \
+                    separated_string[syn_type][syn_round]
+                for elem_num, element in enumerate(elements):
+                    if (syn_type == 0 and element != logical) or (syn_type != 0 and element == '1'):
+                        nodes.append((syn_type,
+                                      syn_round,
+                                      elem_num))
+        return nodes
+
     def _make_syndrome_graph(self):
-        '''
+        """
         This method injects all possible Pauli errors into the circuit for
-        `code`. This is done by examining the qubits used in each gate of the
+        ``code``.
+
+        This is done by examining the qubits used in each gate of the
         circuit for a stored logical 0. A graph is then created with a node
         for each non-trivial syndrome element, and an edge between all such
         elements that can be created by the same error.
-        '''
+        """
 
-        S = nx.Graph()
+        S = rx.PyGraph(multigraph=False)
 
         qc = self.code.circuit['0']
 
@@ -87,59 +117,156 @@ class GraphDecoder():
                     temp_qc = copy.deepcopy(blank_qc)
                     temp_qc.name = str((j, qubit, error))
                     temp_qc.data = qc.data[0:j]
-                    eval('temp_qc.' + error + '(qubit)')
+                    getattr(temp_qc, error)(qubit)
                     temp_qc.data += qc.data[j:depth + 1]
                     circuit_name[(j, qubit, error)] = temp_qc.name
                     error_circuit[temp_qc.name] = temp_qc
 
-        job = execute(list(error_circuit.values()),
-                      Aer.get_backend('qasm_simulator'))
+        if HAS_AER:
+            simulator = Aer.get_backend('qasm_simulator')
+        else:
+            simulator = BasicAer.get_backend('qasm_simulator')
 
+        job = execute(list(error_circuit.values()), simulator)
+
+        node_map = {}
         for j in range(depth):
             qubits = qc.data[j][1]
             for qubit in qubits:
                 for error in ['x', 'y', 'z']:
-
                     raw_results = {}
                     raw_results['0'] = job.result().get_counts(
                         str((j, qubit, error)))
                     results = self.code.process_results(raw_results)['0']
 
                     for string in results:
-                        separated_string = self._separate_string(string)
 
-                        nodes = []
-                        for syn_type, _ in enumerate(separated_string):
-                            for syn_round in range(
-                                    len(separated_string[syn_type])):
-                                elements = \
-                                    separated_string[syn_type][syn_round]
-                                for elem_num, element in enumerate(elements):
-                                    if element == '1':
-                                        nodes.append((syn_type,
-                                                      syn_round,
-                                                      elem_num))
+                        nodes = self._string2nodes(string)
 
+                        assert len(nodes) in [0, 2], "Error of type " + \
+                            error + " on qubit " + str(qubit) + \
+                            " at depth " + str(j) + " creates " + \
+                            str(len(nodes)) + \
+                            " nodes in syndrome graph, instead of 2."
                         for node in nodes:
-                            S.add_node(node)
+                            if node not in node_map:
+                                node_map[node] = S.add_node(node)
                         for source in nodes:
                             for target in nodes:
-                                if source != target:
-                                    S.add_edge(source, target, distance=1)
+                                if target != source:
+                                    S.add_edge(node_map[source],
+                                               node_map[target], 1)
 
         return S
 
-    def make_error_graph(self, string, subgraphs=None):
-        '''
+    def get_error_probs(self, results, logical='0'):
+        """
+        Generate probabilities of single error events from result counts.
+
         Args:
-            string: A string describing the output from the code.
-            subgraphs: Used when multiple, semi-indepedent graphs need
+            results (dict): A results dictionary, as produced by the
+            `process_results` method of the code.
+            logical (string): Logical value whose results are used.
+
+        Returns:
+            dict: Keys are the edges for specific error
+            events, and values are the calculated probabilities
+
+        Additional information:
+            Uses `results` to estimate the probability of the errors that
+            create the pairs of nodes specified by the edge.
+            Calculation done using the method of Spitz, et al.
+            https://doi.org/10.1002/qute.201800012
+        """
+
+        results = results[logical]
+        shots = sum(results.values())
+
+        neighbours = {}
+        av_v = {}
+        for node in self.S.nodes():
+            av_v[node] = 0
+            neighbours[node] = []
+
+        av_vv = {}
+        av_xor = {}
+        for edge in self.S.edge_list():
+            node0, node1 = self.S[edge[0]], self.S[edge[1]]
+            av_vv[node0, node1] = 0
+            av_xor[node0, node1] = 0
+            neighbours[node0].append(node1)
+            neighbours[node1].append(node0)
+
+        error_probs = {}
+        for string in results:
+
+            # list of i for which v_i=1
+            error_nodes = self._string2nodes(string, logical=logical)
+
+            for node0 in error_nodes:
+                av_v[node0] += results[string]
+                for node1 in neighbours[node0]:
+                    if node1 in error_nodes and (node0, node1) in av_vv:
+                        av_vv[node0, node1] += results[string]
+                    if node1 not in error_nodes:
+                        if (node0, node1) in av_xor:
+                            av_xor[node0, node1] += results[string]
+                        else:
+                            av_xor[node1, node0] += results[string]
+
+        for node in self.S.nodes():
+            av_v[node] /= shots
+        for edge in self.S.edge_list():
+            node0, node1 = self.S[edge[0]], self.S[edge[1]]
+            av_vv[node0, node1] /= shots
+            av_xor[node0, node1] /= shots
+
+        for edge in self.S.edge_list():
+            node0, node1 = self.S[edge[0]], self.S[edge[1]]
+            if (1 - 2*av_xor[node0, node1]) != 0:
+                x = (av_vv[node0, node1] - av_v[node0]*av_v[node1])/(1 - 2*av_xor[node0, node1])
+                error_probs[node0, node1] = max(0, 0.5 - np.sqrt(0.25-x))
+            else:
+                error_probs[node0, node1] = np.nan
+
+        return error_probs
+
+    def weight_syndrome_graph(self, results):
+        """Generate weighted syndrome graph from result counts.
+
+        Args:
+            results (dict): A results dictionary, as produced by the
+            `process_results` method of the code.
+
+        Additional information:
+            Uses `results` to estimate the probability of the errors that
+            create the pairs of nodes in S. The edge weights are then
+            replaced with the corresponding -log(p/(1-p).
+        """
+
+        error_probs = self.get_error_probs(results)
+
+        for edge in self.S.edge_list():
+            p = error_probs[self.S[edge[0]], self.S[edge[1]]]
+            if p == 0:
+                w = np.inf
+            elif 1-p == 1:
+                w = -np.inf
+            else:
+                w = -np.log(p/(1-p))
+            self.S.update_edge(edge[0], edge[1], w)
+
+    def make_error_graph(self, string, subgraphs=None):
+        """
+        Args:
+            string (str): A string describing the output from the code.
+            subgraphs (list): Used when multiple, semi-independent graphs need
             need to created.
 
         Returns:
             E: The subgraph(s) of S which corresponds to the non-trivial
             syndrome elements in the given string.
-        '''
+        """
 
         if subgraphs is None:
             subgraphs = []
@@ -149,57 +276,67 @@ class GraphDecoder():
         set_subgraphs = [
             subgraph for subs4type in subgraphs for subgraph in subs4type]
 
-        E = {subgraph: nx.Graph() for subgraph in set_subgraphs}
+        E = {}
+        node_sets = {}
+        for subgraph in set_subgraphs:
+            E[subgraph] = rx.PyGraph(multigraph=False)
+            node_sets[subgraph] = set()
 
+        E = {subgraph: rx.PyGraph(multigraph=False) for subgraph in set_subgraphs}
         separated_string = self._separate_string(string)
-
         for syndrome_type, _ in enumerate(separated_string):
             for syndrome_round in range(len(separated_string[syndrome_type])):
                 elements = separated_string[syndrome_type][syndrome_round]
                 for elem_num, element in enumerate(elements):
                     if element == '1' or syndrome_type == 0:
                         for subgraph in subgraphs[syndrome_type]:
-                            E[subgraph].add_node(
-                                (syndrome_type,
-                                 syndrome_round,
-                                 elem_num))
+                            node_data = (syndrome_type, syndrome_round, elem_num)
+                            if node_data not in node_sets[subgraph]:
+                                E[subgraph].add_node(node_data)
+                                node_sets[subgraph].add(node_data)
 
         # for each pair of nodes in error create an edge and weight with the
         # distance
-        for subgraph in set_subgraphs:
-            for source in E[subgraph]:
-                for target in E[subgraph]:
-                    if target != (source):
-                        distance = int(nx.shortest_path_length(
-                            self.S, source, target))
-                        E[subgraph].add_edge(source, target, weight=-distance)
+        distance_matrix = rx.graph_floyd_warshall_numpy(self.S, weight_fn=float)
+        s_node_map = {self.S[index]: index for index in self.S.node_indexes()}
 
+        for subgraph in set_subgraphs:
+            for source_index in E[subgraph].node_indexes():
+                for target_index in E[subgraph].node_indexes():
+                    source = E[subgraph][source_index]
+                    target = E[subgraph][target_index]
+                    if target != source:
+                        distance = int(distance_matrix[s_node_map[source]][s_node_map[target]])
+                        E[subgraph].add_edge(source_index, target_index,
+                                             -distance)
         return E
 
     def matching(self, string):
-        '''
+        """
         Args:
-            string: A string describing the output from the code.
+            string (str): A string describing the output from the code.
 
         Returns:
-            logical_string: A string with corrected logical values,
-            computed using minimum weight perfect matching.
+            str: A string with corrected logical values,
+                computed using minimum weight perfect matching.
 
         Additional information:
             This function can be run directly, or used indirectly to
             calculate a logical error probability with `get_logical_prob`
-        '''
+        """
 
         # this matching algorithm is designed for a single graph
         E = self.make_error_graph(string)['0']
 
         # set up graph that is like E, but each syndrome node is connected to a
         # separate copy of the nearest logical node
-        E_matching = nx.Graph()
+        E_matching = rx.PyGraph(multigraph=False)
         syndrome_nodes = []
         logical_nodes = []
         logical_neighbours = []
-        for node in E:
+        node_map = {}
+        for node in E.nodes():
+            node_map[node] = E_matching.add_node(node)
             if node[0] == 0:
                 logical_nodes.append(node)
             else:
@@ -208,26 +345,34 @@ class GraphDecoder():
             for target in syndrome_nodes:
                 if target != (source):
                     E_matching.add_edge(
-                        source, target, weight=E[source][target]['weight'])
+                        node_map[source],
+                        node_map[target],
+                        E.get_edge_data(node_map[source],
+                                        node_map[target]))
 
             potential_logical = {}
             for target in logical_nodes:
-                potential_logical[target] = E[source][target]['weight']
+                potential_logical[target] = E.get_edge_data(node_map[source],
+                                                            node_map[target])
             nearest_logical = max(potential_logical, key=potential_logical.get)
+            nl_target = nearest_logical + source
+            if nl_target not in node_map:
+                node_map[nl_target] = E_matching.add_node(nl_target)
             E_matching.add_edge(
-                source,
-                nearest_logical + source,
-                weight=potential_logical[nearest_logical])
-            logical_neighbours.append(nearest_logical + source)
+                node_map[source],
+                node_map[nl_target],
+                potential_logical[nearest_logical])
+            logical_neighbours.append(nl_target)
         for source in logical_neighbours:
             for target in logical_neighbours:
                 if target != (source):
-                    E_matching.add_edge(source, target, weight=0)
-
+                    E_matching.add_edge(node_map[source], node_map[target], 0)
         # do the matching on this
-        matches = nx.max_weight_matching(E_matching, maxcardinality=True)
-
-        # use it to construct and return a correcetd logical string
+        matches = {
+            (E_matching[x[0]],
+             E_matching[x[1]]) for x in rx.max_weight_matching(
+                 E_matching, max_cardinality=True, weight_fn=lambda x: x)}
+        # use it to construct and return a corrected logical string
         logicals = self._separate_string(string)[0]
         for (source, target) in matches:
             if source[0] == 0 and target[0] != 0:
@@ -243,17 +388,17 @@ class GraphDecoder():
         return logical_string
 
     def get_logical_prob(self, results, algorithm='matching'):
-        '''
+        """
         Args:
-            results: A results dictionary, as produced by the
+            results (dict): A results dictionary, as produced by the
             `process_results` method of the code.
-            algorithm: Choice of which decoder to use.
+            algorithm (str): Choice of which decoder to use.
 
         Returns:
-            logical_prob: Dictionary of logical error probabilities for
+            dict: Dictionary of logical error probabilities for
             each of the encoded logical states whose results were given in
             the input.
-        '''
+        """
 
         logical_prob = {}
         for log in results:
@@ -287,19 +432,20 @@ class GraphDecoder():
 
 
 def postselection_decoding(results):
-    '''
+    """
     Calculates the logical error probability using postselection decoding.
+
     This postselects all results with trivial syndrome.
 
     Args:
-        results: A results dictionary, as produced by the
-                `process_results` method of a code.
+        results (dict): A results dictionary, as produced by the
+            `process_results` method of a code.
 
     Returns:
-        logical_prob: Dictionary of logical error probabilities for
-        each of the encoded logical states whose results were given in
-        the input.
-    '''
+        dict: Dictionary of logical error probabilities for
+           each of the encoded logical states whose results were given in
+           the input.
+    """
     logical_prob = {}
     postselected_results = {}
     for log in results:
@@ -331,20 +477,20 @@ def postselection_decoding(results):
 
 
 def lookuptable_decoding(training_results, real_results):
-    '''
+    """
     Calculates the logical error probability using postselection decoding.
     This postselects all results with trivial syndrome.
 
     Args:
-        training_results: A results dictionary, as produced by the
-                `process_results` method of a code.
-        real_results: A results dictionary, as produced by the
-                `process_results` method of a code.
+        training_results (dict): A results dictionary, as produced by the
+            ``process_results`` method of a code.
+        real_results (dict): A results dictionary, as produced by the
+            ``process_results`` method of a code.
 
     Returns:
-        logical_prob: Dictionary of logical error probabilities for
-        each of the encoded logical states whose results were given in
-        the input.
+        dict: Dictionary of logical error probabilities for
+            each of the encoded logical states whose results were given in
+            the input.
 
 
     Additional information:
@@ -353,7 +499,7 @@ def lookuptable_decoding(training_results, real_results):
         decoding. This is done using `training_results` as a guide to which
         syndrome is most probable for each logical value, and the
         probability is calculated for the results in `real_results`.
-    '''
+    """
 
     logical_prob = {}
     for log in real_results:

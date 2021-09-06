@@ -13,31 +13,34 @@
 # that they have been altered from the originals.
 
 # pylint: disable=missing-docstring
+# pylint: disable=unexpected-keyword-arg
+# pylint: disable=invalid-name
 
 import unittest
 
 import qiskit
 from qiskit import QuantumRegister, QuantumCircuit, Aer
 from qiskit.quantum_info import state_fidelity
-from qiskit.tools.qi.qi import outer
+from qiskit.quantum_info import Choi
 
 import qiskit.ignis.verification.tomography as tomo
+from qiskit.ignis.verification.tomography.fitters import cvx_fit
 
 
-def run_circuit_and_tomography(circuit, qubits):
-    job = qiskit.execute(circuit, Aer.get_backend('unitary_simulator'))
-    U = job.result().get_unitary(circuit)
-    choi_ideal = outer(U.ravel(order='F'))
+def run_circuit_and_tomography(circuit, qubits, method):
+    choi_ideal = Choi(circuit).data
     qst = tomo.process_tomography_circuits(circuit, qubits)
     job = qiskit.execute(qst, Aer.get_backend('qasm_simulator'),
                          shots=5000)
     tomo_fit = tomo.ProcessTomographyFitter(job.result(), qst)
-    choi_cvx = tomo_fit.fit(method='cvx').data
-    choi_mle = tomo_fit.fit(method='lstsq').data
-    return (choi_cvx, choi_mle, choi_ideal)
+    choi = tomo_fit.fit(method=method).data
+    return (choi, choi_ideal)
 
 
 class TestProcessTomography(unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        self.method = 'lstsq'
 
     def test_bell_2_qubits(self):
         q2 = QuantumRegister(2)
@@ -45,11 +48,16 @@ class TestProcessTomography(unittest.TestCase):
         bell.h(q2[0])
         bell.cx(q2[0], q2[1])
 
-        choi_cvx, choi_mle, choi_ideal = run_circuit_and_tomography(bell, q2)
-        F_bell_cvx = state_fidelity(choi_ideal/4, choi_cvx/4)
-        self.assertAlmostEqual(F_bell_cvx, 1, places=1)
-        F_bell_mle = state_fidelity(choi_ideal/4, choi_mle/4)
-        self.assertAlmostEqual(F_bell_mle, 1, places=1)
+        choi, choi_ideal = run_circuit_and_tomography(bell, q2, self.method)
+        F_bell = state_fidelity(choi_ideal/4, choi/4, validate=False)
+        self.assertAlmostEqual(F_bell, 1, places=1)
+
+
+@unittest.skipUnless(cvx_fit._HAS_CVX, 'cvxpy is required for this test')
+class TestProcessTomographyCVX(TestProcessTomography):
+    def setUp(self):
+        super().setUp()
+        self.method = 'cvx'
 
 
 if __name__ == '__main__':

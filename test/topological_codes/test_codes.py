@@ -12,9 +12,9 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-'''
-Run codes and decoders
-'''
+# pylint: disable=invalid-name
+
+"""Run codes and decoders."""
 
 import unittest
 
@@ -23,15 +23,13 @@ from qiskit.ignis.verification.topological_codes import GraphDecoder
 from qiskit.ignis.verification.topological_codes import lookuptable_decoding
 from qiskit.ignis.verification.topological_codes import postselection_decoding
 
-from qiskit import execute, Aer
+from qiskit import execute, Aer, QuantumCircuit
 from qiskit.providers.aer.noise import NoiseModel
 from qiskit.providers.aer.noise.errors import pauli_error, depolarizing_error
 
 
 def get_syndrome(code, noise_model, shots=1014):
-    '''
-    Runs a code to get required results.
-    '''
+    """Runs a code to get required results."""
     circuits = [code.circuit[log] for log in ['0', '1']]
 
     job = execute(
@@ -47,9 +45,7 @@ def get_syndrome(code, noise_model, shots=1014):
 
 
 def get_noise(p_meas, p_gate):
-    '''
-    Define a noise model.
-    '''
+    """Define a noise model."""
     error_meas = pauli_error([('X', p_meas), ('I', 1 - p_meas)])
     error_gate1 = depolarizing_error(p_gate, 1)
     error_gate2 = error_gate1.tensor(error_gate1)
@@ -66,12 +62,87 @@ def get_noise(p_meas, p_gate):
 
 
 class TestCodes(unittest.TestCase):
-    """ The test class """
+    """Test the topological codes module. """
+    def single_error_test(self, code):
+        """
+        Insert all possible single qubit errors into the given code,
+        and check that each creates a pair of syndrome nodes.
+        """
+        decoder = GraphDecoder(code)
 
-    def test_rep(self):
-        """
-        Repetition code test.
-        """
+        for logical in ['0', '1']:
+            qc = code.circuit[logical]
+            blank_qc = QuantumCircuit()
+            for qreg in qc.qregs:
+                blank_qc.add_register(qreg)
+            for creg in qc.cregs:
+                blank_qc.add_register(creg)
+            error_circuit = {}
+            circuit_name = {}
+            depth = len(qc)
+            for j in range(depth):
+                qubits = qc.data[j][1]
+                for qubit in qubits:
+                    for error in ['x', 'y', 'z']:
+                        temp_qc = blank_qc.copy()
+                        temp_qc.name = str((j, qubit, error))
+                        temp_qc.data = qc.data[0:j]
+                        getattr(temp_qc, error)(qubit)
+                        temp_qc.data += qc.data[j:depth + 1]
+                        circuit_name[(j, qubit, error)] = temp_qc.name
+                        error_circuit[temp_qc.name] = temp_qc
+
+            simulator = Aer.get_backend('qasm_simulator')
+            job = execute(list(error_circuit.values()), simulator)
+
+            for j in range(depth):
+                qubits = qc.data[j][1]
+                for qubit in qubits:
+                    for error in ['x', 'y', 'z']:
+                        raw_results = {}
+                        raw_results[logical] = job.result().get_counts(
+                            str((j, qubit, error)))
+                        results = code.process_results(raw_results)[logical]
+                        for string in results:
+                            nodes = decoder._string2nodes(string,
+                                                          logical=logical)
+                            self.assertIn(len(nodes), [0, 2], "Error of type " +
+                                          error + " on qubit " + str(qubit) +
+                                          " at depth " + str(j) + " creates " +
+                                          str(len(nodes)) +
+                                          " nodes in syndrome graph, instead of 2.")
+
+    def test_string2nodes(self):
+        """Test string2nodes with different logical values."""
+        code = RepetitionCode(3, 2)
+        dec = GraphDecoder(code)
+        s0 = '0 0  01 00 01'
+        s1 = '1 1  01 00 01'
+        self.assertTrue(
+            dec._string2nodes(s0, logical='0') == dec._string2nodes(s1, logical='1'),
+            'Error: Incorrect nodes from results string')
+
+    def test_graph_construction(self):
+        """Check that single errors create a pair of nodes for all types of code."""
+        for d in [2, 3]:
+            for T in [1, 2]:
+                for xbasis in [False, True]:
+                    code = RepetitionCode(d, T, xbasis=xbasis)
+                    self.single_error_test(code)
+
+    def test_weight(self):
+        """Error weighting code test."""
+        error = "Error: Calculated error probability not correct for "\
+            + "test result '0 0  11 00' in d=3, T=1 repetition code."
+        code = RepetitionCode(3, 1)
+        dec = GraphDecoder(code)
+        test_results = {'0': {'0 0  00 00': 1024, '0 0  11 00': 512}}
+        p = dec.get_error_probs(test_results)
+        self.assertTrue(
+            round(p[(1, 0, 0), (1, 0, 1)], 2) == 0.33, error)
+
+    def test_rep_probs(self):
+        """Repetition code test."""
         matching_probs = {}
         lookup_probs = {}
         post_probs = {}

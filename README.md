@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/github/license/Qiskit/qiskit-ignis.svg?style=popout-square)](https://opensource.org/licenses/Apache-2.0)[![Build Status](https://img.shields.io/travis/com/Qiskit/qiskit-ignis/master.svg?style=popout-square)](https://travis-ci.com/Qiskit/qiskit-ignis)[![](https://img.shields.io/github/release/Qiskit/qiskit-ignis.svg?style=popout-square)](https://github.com/Qiskit/qiskit-ignis/releases)[![](https://img.shields.io/pypi/dm/qiskit-ignis.svg?style=popout-square)](https://pypi.org/project/qiskit-ignis/)
 
-**Qiskit** is an open-source framework for working with noisy intermediate-scale quantum computers (NISQ) at the level of pulses, circuits, and algorithms.
+**Qiskit** is an open-source framework for working with noisy quantum computers at the level of pulses, circuits, and algorithms.
 
 Qiskit is made up of elements that each work together to enable quantum computing. This element is **Ignis**, which provides tools for quantum hardware verification, noise characterization, and error correction.
 
@@ -18,6 +18,24 @@ pip install qiskit
 PIP will handle all dependencies automatically for us and you will always install the latest (and well-tested) version.
 
 To install from source, follow the instructions in the [contribution guidelines](./CONTRIBUTING.md).
+
+### Extra Requirements
+
+Some functionality has extra optional requirements. If you're going to use any
+visualization functions for fitters you'll need to install matplotlib. You
+can do this with `pip install matplotlib` or when you install ignis with
+`pip install qiskit-ignis[visualization]`. If you're going to use a cvx fitter
+for running tomogography you'll need to install cvxpy. You can do this with
+`pip install cvxpy` or when you install ignis with
+`pip install qiskit-ignis[cvx]`. When performing expectation value measurement
+error mitigation using the CTMP method performance can be improved using
+just-in-time compiling if Numbda is installed. You can do this with
+`pip install numba` or when you install ignis with
+`pip install qiskit-ignis[jit]`. For using the discriminator classes in
+`qiskit.ignis.measurement` scikit-learn needs to be installed. You can do this with
+`pip install scikit-learn` or when you install ignis with
+`pip install qiskit-ignis[iq]`. If you want to install all extra requirements
+when you install ignis you can run `pip install qiskit-ignis[visualization,cvx,jit,iq]`.
 
 ## Creating your first quantum experiment with Qiskit Ignis
 Now that you have Qiskit Ignis installed, you can start creating experiments, to reveal information about the device quality. Here is a basic example:
@@ -88,8 +106,6 @@ Results without mitigation: {'000': 181, '001': 83, '010': 59, '011': 65, '100':
 Results with mitigation: {'000': 421, '001': 2, '011': 1, '100': 53, '110': 13, '111': 510}
 ```
 
-## Contribution guidelines
-
 ## Contribution Guidelines
 
 If you'd like to contribute to Qiskit Ignis, please take a look at our
@@ -100,7 +116,7 @@ We use [GitHub issues](https://github.com/Qiskit/qiskit-ignis/issues) for tracki
 ## Next Steps
 
 Now you're set up and ready to check out some of the other examples from our
-[Qiskit Tutorials](https://github.com/Qiskit/qiskit-tutorials/tree/master/qiskit/ignis) repository.
+[Qiskit Tutorials](https://github.com/Qiskit/qiskit-iqx-tutorials/tree/master/qiskit/advanced/ignis) repository.
 
 ## Authors and Citation
 

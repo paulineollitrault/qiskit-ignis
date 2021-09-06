@@ -12,12 +12,15 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
+# pylint: disable=invalid-name
+
 """
 Circuit generation for measuring gate errors
 """
 
 import numpy as np
 import qiskit
+from qiskit.circuit.library import U1Gate, U2Gate
 
 
 def ampcal_1Q_circuits(max_reps, qubits):
@@ -32,13 +35,14 @@ def ampcal_1Q_circuits(max_reps, qubits):
     Y90-(Y90-Y90)^n
 
     Args:
-       max_reps: the maximum number of repetitions. Circuits will increment
-       by 1 rep up to max_rep
-       qubits (list of integers): indices of the qubits to perform the
-       calibration on
+        max_reps (int): the maximum number of repetitions. Circuits will
+            increment by 1 rep up to max_rep
+        qubits (list): a list of integers indices of the qubits to perform the
+            calibration on
     Returns:
-       A list of QuantumCircuit
-       xdata: a list of gate repetitions (number of u2 gates)
+        tuple: A tuple of the form (``circuits``, ``xdata``) where
+            ``circuits`` is a list of QuantumCircuit and ``xdata`` is a list of
+            gate repetitions (number of u2 gates)
     """
 
     xdata = np.arange(max_reps)*2
@@ -51,9 +55,10 @@ def ampcal_1Q_circuits(max_reps, qubits):
         circ = qiskit.QuantumCircuit(qr, cr)
         circ.name = 'ampcal1Qcircuit_' + str(circ_index) + '_0'
         for qind, qubit in enumerate(qubits):
-            circ.u2(0.0, 0.0, qr[qubit])
+            circ.append(U2Gate(0.0, 0.0), [qr[qubit]])
             for _ in range(circ_length):
-                circ.u2(0.0, 0.0, qr[qubit])
+                circ.barrier(qr[qubit])
+                circ.append(U2Gate(0.0, 0.0), [qr[qubit]])
 
         for qind, qubit in enumerate(qubits):
             circ.measure(qr[qubit], cr[qind])
@@ -70,14 +75,17 @@ def anglecal_1Q_circuits(max_reps, qubits, angleerr=0.0):
     Y90-(X90-X90-Y90-Y90)^n - X90
 
     Args:
-       max_reps: the maximum number of repetitions. Circuits will increment
-       by 1 rep up to max_rep
-       qubits (list of integers): indices of the qubits to perform the
-       calibration on
-       angleerr: put in an artificial angle error (for testing)
+        max_reps (int): the maximum number of repetitions. Circuits will
+            increment by 1 rep up to max_rep
+        qubits (list): a list of integers indices of the qubits to perform the
+            calibration on
+        angleerr (float): put in an artificial angle error (for testing)
+
+
     Returns:
-       A list of QuantumCircuit
-       xdata: a list of gate repetitions
+        tuple: A tuple of the form (``circuits``, ``xdata``) where
+            ``circuits`` is a list of QuantumCircuit and ``xdata`` is a list of
+            gate repetitions (number of u2 gates)
     """
 
     xdata = np.arange(max_reps)*2
@@ -90,20 +98,22 @@ def anglecal_1Q_circuits(max_reps, qubits, angleerr=0.0):
         circ = qiskit.QuantumCircuit(qr, cr)
         circ.name = 'anglecal1Qcircuit_' + str(circ_index) + '_0'
         for qind, qubit in enumerate(qubits):
-            circ.u2(0.0, 0.0, qr[qubit])  # Y90p
+            circ.append(U2Gate(0.0, 0.0), [qr[qubit]])  # Y90p
             for _ in range(circ_length):
                 if angleerr != 0:
-                    circ.u1(-2*angleerr, qr[qubit])
+                    circ.append(U1Gate(-2*angleerr), [qr[qubit]])
                 for _ in range(2):
-                    circ.u2(-np.pi/2, np.pi/2, qr[qubit])  # Xp
+                    circ.barrier(qr[qubit])
+                    circ.append(U2Gate(-np.pi/2, np.pi/2), [qr[qubit]])  # Xp
                 if angleerr != 0:
-                    circ.u1(2*angleerr, qr[qubit])
+                    circ.append(U1Gate(2*angleerr), [qr[qubit]])
                 for _ in range(2):
-                    circ.u2(0.0, 0.0, qr[qubit])  # Yp
+                    circ.barrier(qr[qubit])
+                    circ.append(U2Gate(0.0, 0.0), [qr[qubit]])  # Yp
 
             if angleerr != 0:
-                circ.u1(-angleerr, qr[qubit])
-            circ.u2(-np.pi/2, np.pi/2, qr[qubit])  # X90p
+                circ.append(U1Gate(-angleerr), [qr[qubit]])
+            circ.append(U2Gate(-np.pi/2, np.pi/2), [qr[qubit]])  # X90p
         for qind, qubit in enumerate(qubits):
             circ.measure(qr[qubit], cr[qind])
         circuits.append(circ)
@@ -126,15 +136,17 @@ def ampcal_cx_circuits(max_reps, qubits, control_qubits):
     target-control pairs are not in the coupling map
 
     Args:
-       max_reps: the maximum number of repetitions. Circuits will increment
-       by 1 rep up to max_rep
-       qubits (list of integers): indices of the target qubits
-       to perform the calibration on
-       contorl_qubits (list of integers): indices of the control qubits
-       to perform the calibration on
+        max_reps (int): the maximum number of repetitions. Circuits will
+            increment by 1 rep up to max_rep
+        qubits (list): a list of integer indices of the qubits to perform the
+            calibration on
+        control_qubits (list): a list of integer indices of the control qubits
+            to perform the calibration on
+
     Returns:
-       A list of QuantumCircuit
-       xdata: a list of gate repetitions
+        tuple: A tuple of the form (``circuits``, ``xdata``) where
+            ``circuits`` is a list of QuantumCircuit and ``xdata`` is a list of
+            gate repetitions (number of u2 gates)
     """
     xdata = np.arange(max_reps)
 
@@ -148,8 +160,9 @@ def ampcal_cx_circuits(max_reps, qubits, control_qubits):
         circ.name = 'ampcalcxcircuit_' + str(circ_index) + '_0'
         for qind, qubit in enumerate(qubits):
             circ.x(qr[control_qubits[qind]])
-            circ.u2(-np.pi/2, np.pi/2, qr[qubit])  # X90p
+            circ.append(U2Gate(-np.pi/2, np.pi/2), [qr[qubit]])  # X90p
             for _ in range(circ_length):
+                circ.barrier([qr[control_qubits[qind]], qr[qubit]])
                 circ.cx(qr[control_qubits[qind]], qr[qubit])
 
         for qind, qubit in enumerate(qubits):
@@ -174,15 +187,20 @@ def anglecal_cx_circuits(max_reps, qubits, control_qubits, angleerr=0.0):
     target-control pairs are not in the coupling map
 
     Args:
-       max_reps: the maximum number of repetitions. Circuits will increment
-       by 1 rep up to max_rep
-       qubits (list of integers): indices of the target qubits
-       to perform the calibration on
-       to perform the calibration on
-       angleerr: Injected angle error for testing
+        max_reps (int): the maximum number of repetitions. Circuits will
+            increment by 1 rep up to max_rep
+        qubits (list): a list of integers indices of the qubits to perform the
+            calibration on
+        control_qubits (list): a list of integer indices of the control qubits
+            to perform the calibration on
+        angleerr (float): put in an artificial angle error (for testing)
+
+
     Returns:
-       A list of QuantumCircuit
-       xdata: a list of gate repetitions
+        tuple: A tuple of the form (``circuits``, ``xdata``) where
+            ``circuits`` is a list of QuantumCircuit and ``xdata`` is a list of
+            gate repetitions (number of u2 gates)
+
     """
 
     xdata = np.arange(max_reps)
@@ -197,16 +215,17 @@ def anglecal_cx_circuits(max_reps, qubits, control_qubits, angleerr=0.0):
         circ.name = 'anglecalcxcircuit_' + str(circ_index) + '_0'
         for qind, qubit in enumerate(qubits):
             circ.x(qr[control_qubits[qind]])
-            circ.u2(0.0, 0.0, qr[qubit])  # Y90p (target)
+            circ.append(U2Gate(0.0, 0.0), [qr[qubit]])  # Y90p (target)
             for _ in range(circ_length):
                 if angleerr != 0:
-                    circ.u1(-angleerr, qr[qubit])
+                    circ.append(U1Gate(-angleerr), [qr[qubit]])
+                circ.barrier([qr[control_qubits[qind]], qr[qubit]])
                 circ.cx(qr[control_qubits[qind]], qr[qubit])
                 if angleerr != 0:
-                    circ.u1(angleerr, qr[qubit])
+                    circ.append(U1Gate(angleerr), [qr[qubit]])
                 circ.y(qr[qubit])  # Yp (target)
 
-            circ.u2(-np.pi/2., np.pi/2., qr[qubit])  # X90p (target)
+            circ.append(U2Gate(-np.pi/2., np.pi/2.), [qr[qubit]])  # X90p (target)
         for qind, qubit in enumerate(qubits):
             circ.measure(qr[qubit], cr[qind])
         circuits.append(circ)

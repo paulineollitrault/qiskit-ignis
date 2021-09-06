@@ -18,6 +18,7 @@ Circuit generation for measuring hamiltonian parametes
 
 import numpy as np
 import qiskit
+from qiskit.circuit.library import U1Gate
 from ..characterization_utils import pad_id_gates
 
 
@@ -28,20 +29,24 @@ def zz_circuits(num_of_gates, gate_time, qubits, spectators, nosc=5):
     ground state, the second with the spectator in the excited state
 
     Args:
-       num_of_gates (list of integers): the number of identity gates in each
-                                        circuit. Must be in an increasing
-                                        order.
-       gate_time (float): time of running a single gate.
-       qubits (list of integers): indices of the qubits to measure and
-       perform the Ramsey
-       spectators (list of integers): indices of the qubits to flip the
-       state (ie measure the ZZ between qubits and spectators). Must
-       be the same length as qubits
-       nosc: number of oscillations to induce using the phase gate
+        num_of_gates (list of integers): the number of identity gates in each
+            circuit. Must be in an increasing order.
+        gate_time (float): time of running a single gate.
+        qubits (list of integers): indices of the qubits to measure and
+            perform the Ramsey
+        spectators (list of integers): indices of the qubits to flip the
+            state (ie measure the ZZ between qubits and spectators). Must
+            be the same length as qubits
+        nosc (int): number of oscillations to induce using the phase gate
+
     Returns:
-       A list of QuantumCircuit
-       xdata: a list of delay times
-       osc_freq: the induced oscillation frequency
+        A list of QuantumCircuit
+        xdata: a list of delay times
+        osc_freq: the induced oscillation frequency
+
+    Raises:
+        ValueError: If the number of qubits differs from the number of
+            spectators
     """
 
     if len(qubits) != len(spectators):
@@ -71,7 +76,7 @@ def zz_circuits(num_of_gates, gate_time, qubits, spectators, nosc=5):
             for qind, qubit in enumerate(qubits):
                 circ.h(qr[qubit])
                 circ = pad_id_gates(circ, qr, qubit, circ_length)
-                circ.u1(2*np.pi*osc_freq*xdata[circ_index], qr[qubit])
+                circ.append(U1Gate(2*np.pi*osc_freq*xdata[circ_index]), [qr[qubit]])
                 circ.h(qr[qubit])
             circ.barrier(qr)
             for qind, qubit in enumerate(qubits):

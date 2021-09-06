@@ -12,28 +12,29 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-'''
-Generates circuits for quantum error correction
-'''
+# pylint: disable=invalid-name
+
+"""Generates circuits for quantum error correction."""
 
 from qiskit import QuantumRegister, ClassicalRegister
 from qiskit import QuantumCircuit
 
 
 class RepetitionCode():
-    '''
+    """
     Implementation of a distance d repetition code, implemented over
     T syndrome measurement rounds.
-    '''
+    """
 
-    def __init__(self, d, T=0):
-        '''
+    def __init__(self, d, T=0, xbasis=False):
+        """
         Creates the circuits corresponding to a logical 0 and 1 encoded
         using a repetition code.
 
         Args:
-            d: Number of code qubits (and hence repetitions) used.
-            T: Number of rounds of ancilla-assited syndrome measurement.
+            d (int): Number of code qubits (and hence repetitions) used.
+            T (int): Number of rounds of ancilla-assisted syndrome measurement.
+            xbasis (bool): Whether to use the X basis to use for encoding (Z basis used by default).
 
 
         Additional information:
@@ -41,7 +42,7 @@ class RepetitionCode():
             `T` rounds are added, followed by measurement of the code
             qubits (corresponding to a logical measurement and final
             syndrome measurement round).
-        '''
+        """
 
         self.d = d
         self.T = 0
@@ -58,48 +59,67 @@ class RepetitionCode():
             self.circuit[log] = QuantumCircuit(
                 self.link_qubit, self.code_qubit, name=log)
 
+        self._xbasis = xbasis
+
         self._preparation()
 
-        for _ in range(T):
+        for _ in range(T-1):
             self.syndrome_measurement()
 
         if T != 0:
+            self.syndrome_measurement(reset=False)
             self.readout()
 
     def get_circuit_list(self):
-        '''
+        """
         Returns:
             circuit_list: self.circuit as a list, with
             circuit_list[0] = circuit['0']
             circuit_list[1] = circuit['1']
-        '''
+        """
         circuit_list = [self.circuit[log] for log in ['0', '1']]
         return circuit_list
 
-    def x(self, logs=('0', '1')):
-        '''
+    def x(self, logs=('0', '1'), barrier=False):
+        """
         Applies a logical x to the circuits for the given logical values.
 
         Args:
-            logs: List or tuple of logical values expressed as strings.
-        '''
+            logs (list or tuple): List or tuple of logical values expressed as
+                strings.
+            barrier (bool): Boolean denoting whether to include a barrier at
+                the end.
+        """
         for log in logs:
-            for j in range(self.d):
-                self.circuit[log].x(self.code_qubit[j])
-            self.circuit[log].barrier()
+            if self._xbasis:
+                self.circuit[log].z(self.code_qubit)
+            else:
+                self.circuit[log].x(self.code_qubit)
+            if barrier:
+                self.circuit[log].barrier()
 
-    def _preparation(self):
-        '''
+    def _preparation(self, barrier=False):
+        """
         Prepares logical bit states by applying an x to the circuit that will
         encode a 1.
-        '''
+        """
+
+        for log in ['0', '1']:
+            if self._xbasis:
+                self.circuit[log].h(self.code_qubit)
+            if barrier:
+                self.circuit[log].barrier()
+
         self.x(['1'])
 
-    def syndrome_measurement(self):
-        '''
+    def syndrome_measurement(self, reset=True, barrier=False):
+        """
         Application of a syndrome measurement round.
-        '''
 
+        Args:
+            reset (bool): If set to true add a boolean at the end of each round
+            barrier (bool): Boolean denoting whether to include a barrier at the end.
+        """
         self.link_bits.append(ClassicalRegister(
             (self.d - 1), 'round_' + str(self.T) + '_link_bit'))
 
@@ -107,49 +127,70 @@ class RepetitionCode():
 
             self.circuit[log].add_register(self.link_bits[-1])
 
-            for j in range(self.d - 1):
-                self.circuit[log].cx(self.code_qubit[j], self.link_qubit[j])
+            if self._xbasis:
+                self.circuit[log].h(self.link_qubit)
 
             for j in range(self.d - 1):
-                self.circuit[log].cx(
-                    self.code_qubit[j + 1], self.link_qubit[j])
+                if self._xbasis:
+                    self.circuit[log].cx(
+                        self.link_qubit[j], self.code_qubit[j])
+                else:
+                    self.circuit[log].cx(
+                        self.code_qubit[j], self.link_qubit[j])
+
+            for j in range(self.d - 1):
+                if self._xbasis:
+                    self.circuit[log].cx(
+                        self.link_qubit[j], self.code_qubit[j + 1])
+                else:
+                    self.circuit[log].cx(
+                        self.code_qubit[j + 1], self.link_qubit[j])
+
+            if self._xbasis:
+                self.circuit[log].h(self.link_qubit)
 
             for j in range(self.d - 1):
                 self.circuit[log].measure(
                     self.link_qubit[j], self.link_bits[self.T][j])
-                self.circuit[log].reset(self.link_qubit[j])
+                if reset:
+                    self.circuit[log].reset(self.link_qubit[j])
 
-            self.circuit[log].barrier()
+            if barrier:
+                self.circuit[log].barrier()
 
         self.T += 1
 
     def readout(self):
-        '''
+        """
         Readout of all code qubits, which corresponds to a logical measurement
         as well as allowing for a measurement of the syndrome to be inferred.
-        '''
+        """
+
         for log in ['0', '1']:
+            if self._xbasis:
+                self.circuit[log].h(self.code_qubit)
             self.circuit[log].add_register(self.code_bit)
             self.circuit[log].measure(self.code_qubit, self.code_bit)
 
     def process_results(self, raw_results):
-        '''
+        """
         Args:
-            raw_results: A dictionary whose keys are logical values, and whose
-            values are standard counts dictionaries, (as obtained from the
-            `get_counts` method of a qiskit.Result object).
+            raw_results (dict): A dictionary whose keys are logical values,
+                and whose values are standard counts dictionaries, (as
+                obtained from the `get_counts` method of a ``qiskit.Result``
+                object).
 
         Returns:
             results: Dictionary with the same structure as the input, but with
-            the bit strings used as keys in the counts dictionaries converted
-            to the form required by the decoder.
+                the bit strings used as keys in the counts dictionaries
+                converted to the form required by the decoder.
 
         Additional information:
             The circuits must be executed outside of this class, so that
             their is full freedom to compile, choose a backend, use a
             noise model, etc. The results from these executions should then
             be used to create the input for this method.
-        '''
+        """
         results = {}
         for log in raw_results:
             results[log] = {}

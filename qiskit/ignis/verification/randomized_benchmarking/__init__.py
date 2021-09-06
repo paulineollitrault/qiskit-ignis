@@ -14,12 +14,14 @@
 
 
 """
-Measurement correction module
+Randomized Benchmarking module
 """
 
-# Measurement correction functions
-from .Clifford import Clifford
-from . import clifford_utils
+# Randomized Benchmarking functions
 from .circuits import randomized_benchmarking_seq
-from .fitters import RBFitter, InterleavedRBFitter, PurityRBFitter
-from . import rb_utils
+from .fitters import (RBFitter, InterleavedRBFitter, PurityRBFitter,
+                      CNOTDihedralRBFitter)
+from .rb_utils import (count_gates, gates_per_clifford,
+                       coherence_limit, twoQ_clifford_error,
+                       calculate_1q_epg, calculate_2q_epg, calculate_1q_epc, calculate_2q_epc)
+from .rb_groups import RBgroup
